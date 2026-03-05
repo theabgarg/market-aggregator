@@ -1,0 +1,31 @@
+services:
+  database:
+    image: postgres:15-alpine3.23
+    environment:
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: supersecretpassword
+      POSTGRES_DB: market_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d market_data"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+
+  engine:
+    build: .
+    environment:
+      PORT: 8080
+      TARGET_SYMBOL: btcusdt
+      DATABASE_URL: postgres://trader:supersecretpassword@database:5432/market_data
+    ports:
+      - "8080:8080"
+    depends_on:
+      database:
+        condition: service_healthy
+
+volumes:
+  pgdata:

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -13,45 +12,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/theabgarg/market-aggregator/internal/api"
 	"github.com/theabgarg/market-aggregator/internal/config"
 	"github.com/theabgarg/market-aggregator/internal/domain"
 	"github.com/theabgarg/market-aggregator/internal/fetcher"
+	"github.com/theabgarg/market-aggregator/internal/repository"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
-
-// Responser handles HTTP requests, utilizing dependency injection for the cache.
-type Responser struct {
-	cache *domain.MarketCache
-}
-
-func (a *Responser) handleAggregator(w http.ResponseWriter, r *http.Request) {
-	symbol := r.URL.Query().Get("symbol")
-	if symbol == "" {
-		symbol = "BTCUSDT"
-	}
-
-	price, exist := a.cache.Get(symbol)
-	if !exist {
-		http.Error(w, "Price not available", http.StatusNotFound)
-		return
-	}
-
-	response := map[string]interface{}{
-		"symbol": symbol,
-		"price":  price,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-func startEngine(ctx context.Context, cache *domain.MarketCache, broadcaster *domain.Broadcaster, symbol string) {
+func startEngine(ctx context.Context, cache *domain.MarketCache, broadcaster *domain.Broadcaster, symbol string, dbWriteChan chan<- domain.MarketData) {
 	streamers := []domain.DataStreamer{
 		&fetcher.BinanceStreamer{Symbol: symbol},
 	}
@@ -81,6 +49,7 @@ func startEngine(ctx context.Context, cache *domain.MarketCache, broadcaster *do
 	for tick := range liveFeed {
 		cache.Update(tick.Symbol, tick.Price)
 		broadcaster.Broadcast(tick)
+		dbWriteChan <- tick
 	}
 }
 
@@ -98,40 +67,55 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("starting market data engine", "port", cfg.Port, "target_symbol", cfg.TargetSymbol)
-
-	cache := domain.NewMarketCache()
-	broadcaster := domain.NewBroadcaster()
-	responser := &Responser{cache: cache}
-
-	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%s", cfg.Port),
-		Handler: http.DefaultServeMux,
+	dbUrl := os.Getenv("DATABASE_URL")
+	if dbUrl == "" {
+		slog.Error("database url fetch failed")
+		os.Exit(1)
 	}
 
-	http.HandleFunc("/api/prices", responser.handleAggregator)
-
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Printf("Websocket upgrade failed: %v\n", err)
-			return
-		}
-
-		broadcaster.AddClient(conn)
-		defer broadcaster.RemoveClient(conn)
-
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				break
-			}
-		}
-	})
+	slog.Info("starting market data engine", "port", cfg.Port, "target_symbol", cfg.TargetSymbol)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	go startEngine(ctx, cache, broadcaster, cfg.TargetSymbol)
+	repo, err := repository.NewPostgresRepo(ctx, dbUrl)
+
+	if err != nil {
+		slog.Error("Database Intialization Failed", "error", err.Error())
+		os.Exit(1)
+	}
+
+	defer repo.Close()
+
+	cache := domain.NewMarketCache()
+	broadcaster := domain.NewBroadcaster()
+
+	apiHandler := api.NewHandler(cache, repo, broadcaster)
+
+	mux := http.NewServeMux()
+
+	apiHandler.RegisterRoutes(mux)
+
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%s", cfg.Port),
+		Handler: mux,
+	}
+
+	dbWriteChan := make(chan domain.MarketData, 500)
+
+	go func() {
+		for tick := range dbWriteChan {
+			insertCtx, cancelInsert := context.WithTimeout(context.Background(), 2*time.Second)
+			err := repo.InsertTick(insertCtx, tick)
+
+			if err != nil {
+				slog.Error("failed to write tick to DB", "error", err.Error())
+			}
+			cancelInsert()
+		}
+	}()
+
+	go startEngine(ctx, cache, broadcaster, cfg.TargetSymbol, dbWriteChan)
 
 	go func() {
 		log.Printf("HTTP API listening on port %s...\n", cfg.Port)
@@ -153,5 +137,6 @@ func main() {
 		log.Fatalf("HTTP Server forced to shutdown due to error: %v", err)
 	}
 
+	close(dbWriteChan)
 	fmt.Println("Engine successfully shut down. Goodbye!")
 }
