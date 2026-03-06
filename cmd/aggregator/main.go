@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -16,43 +15,8 @@ import (
 	"github.com/theabgarg/market-aggregator/internal/config"
 	"github.com/theabgarg/market-aggregator/internal/domain"
 	"github.com/theabgarg/market-aggregator/internal/engine"
-	"github.com/theabgarg/market-aggregator/internal/fetcher"
 	"github.com/theabgarg/market-aggregator/internal/repository"
 )
-
-func startEngine(ctx context.Context, cache *domain.MarketCache, broadcaster *domain.Broadcaster, symbol string, dbWriteChan chan<- domain.MarketData) {
-	streamers := []domain.DataStreamer{
-		&fetcher.BinanceStreamer{Symbol: symbol},
-	}
-
-	liveFeed := make(chan domain.MarketData, 100)
-	var wg sync.WaitGroup
-
-	for _, s := range streamers {
-		wg.Add(1)
-		go func(streamer domain.DataStreamer) {
-			defer wg.Done()
-
-			err := streamer.Stream(ctx, symbol, liveFeed)
-			if err != nil && err != context.Canceled {
-				slog.Error("stream crashed", "streamer type", fmt.Sprintf("%T", streamer), "symbol", symbol, "error", err.Error())
-			}
-		}(s)
-	}
-
-	go func() {
-		wg.Wait()
-		slog.Info("All streams have shut down. Closing hub.")
-		close(liveFeed)
-	}()
-
-	slog.Info("Listening for live trades... (Press Ctrl+C to stop)")
-	for tick := range liveFeed {
-		cache.Update(tick.Symbol, tick.Price)
-		broadcaster.Broadcast(tick)
-		dbWriteChan <- tick
-	}
-}
 
 func main() {
 
@@ -114,7 +78,6 @@ func main() {
 	go func() {
 		slog.Info("engine router running...")
 		for tick := range liveFeed {
-			fmt.Print(tick, "tick")
 			cache.Update(tick.Symbol, tick.Price)
 			broadcaster.Broadcast(tick)
 			dbWriteChan <- tick
