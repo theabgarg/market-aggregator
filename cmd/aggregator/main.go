@@ -129,6 +129,8 @@ func main() {
 	<-ctx.Done()
 	slog.Warn("\nShutdown signal received! Initiating graceful shutdown...")
 
+	broadcaster.Shutdown()
+
 	// 5. Graceful HTTP Shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

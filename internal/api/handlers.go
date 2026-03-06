@@ -87,12 +87,25 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Websocket upgrade failed: %v\n", err)
 		return
 	}
-	h.broadcaster.AddClient(conn)
 	defer h.broadcaster.RemoveClient(conn)
 
 	for {
-		if _, _, err := conn.ReadMessage(); err != nil {
+		var msg domain.ClientMessage
+
+		err := conn.ReadJSON(&msg)
+
+		if err != nil {
+			slog.Info("client disconnected", "reason", err.Error())
 			break
+		}
+
+		switch msg.Action {
+		case "subscribe":
+			h.broadcaster.Subscribe(conn, msg.Symbol)
+		case "unsubscribe":
+			h.broadcaster.Unsubscribe(conn, msg.Symbol)
+		default:
+			slog.Warn("unknown websocket action received", "action", msg.Action)
 		}
 	}
 }

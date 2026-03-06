@@ -1,51 +1,102 @@
 package domain
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/gorilla/websocket"
 )
 
+type ClientMessage struct {
+	Action string `json:"action"`
+	Symbol string `json:"symbol"`
+}
+
 type Broadcaster struct {
-	mu      sync.Mutex
-	clients map[*websocket.Conn]bool
+	mu     sync.Mutex
+	topics map[string]map[*websocket.Conn]bool
 }
 
 func NewBroadcaster() *Broadcaster {
 	return &Broadcaster{
-		clients: make(map[*websocket.Conn]bool),
+		topics: make(map[string]map[*websocket.Conn]bool),
 	}
 }
 
-func (b *Broadcaster) AddClient(conn *websocket.Conn) {
+func (b *Broadcaster) Subscribe(conn *websocket.Conn, symbol string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.clients[conn] = true
-	conn.WriteMessage(websocket.TextMessage, []byte("welcome to our websocket"))
-	log.Printf("New Client connected. total connections: %d\n", len(b.clients))
+
+	if b.topics[symbol] == nil {
+		b.topics[symbol] = make(map[*websocket.Conn]bool)
+	}
+
+	b.topics[symbol][conn] = true
+	slog.Info("client subscribed", "symbol", symbol, "total_subscribers", len(b.topics[symbol]))
+}
+
+func (b *Broadcaster) Unsubscribe(conn *websocket.Conn, symbol string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if clients, exists := b.topics[symbol]; exists {
+		delete(clients, conn)
+		slog.Info("client unsubscribed", "symbol", symbol, "remaining subs", len(b.topics[symbol]))
+	}
 }
 
 func (b *Broadcaster) RemoveClient(conn *websocket.Conn) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _,ok := b.clients[conn]; ok {
-		delete(b.clients, conn)
-		conn.Close()
-		log.Printf("Client Disconnected. total active connections: %d\n",  len(b.clients))
+
+	for symbol, clients := range b.topics {
+		if _, exists := clients[conn]; exists {
+			delete(clients, conn)
+			slog.Info("client cleaned up from topic", "symbol", symbol)
+		}
 	}
+	conn.Close()
 }
 
 func (b *Broadcaster) Broadcast(tick MarketData) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	for conn := range b.clients {
+	clients, exists := b.topics[tick.Symbol]
+
+	if !exists || len(clients) == 0 {
+		return
+	}
+
+	for conn := range clients {
 		err := conn.WriteJSON(tick)
 		if err != nil {
-			log.Printf("Failed to send to client. removing connection: %v\n", err)
-			delete(b.clients, conn)
-			conn.Close()
+			slog.Error("failed to write to client", "error", err.Error())
 		}
 	}
+}
+
+func (b *Broadcaster) Shutdown() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	slog.Info("broadcaster initiating graceful disconnect for all clients")
+
+	closeMessage := websocket.FormatCloseMessage(
+		websocket.CloseNormalClosure,
+		"Server is shutting down for maintenance",
+	)
+
+	for symbol, clients := range b.topics{
+		for conn := range clients {
+			err := conn.WriteMessage(websocket.CloseMessage, closeMessage)
+			if err != nil {
+				slog.Warn("Failed to send close message", "symbol", symbol, "error", err.Error())
+			}
+			conn.Close()
+		}
+		delete(b.topics, symbol)
+	}
+
+	slog.Info("All websocket clients diconnected successfully")
 }
