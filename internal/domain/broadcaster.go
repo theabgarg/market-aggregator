@@ -13,13 +13,17 @@ type ClientMessage struct {
 }
 
 type Broadcaster struct {
-	mu     sync.Mutex
-	topics map[string]map[*websocket.Conn]bool
+	mu          sync.Mutex
+	topics      map[string]map[*websocket.Conn]bool
+	onFirstSub  func(symbol string)
+	onLastUnsub func(symbol string)
 }
 
-func NewBroadcaster() *Broadcaster {
+func NewBroadcaster(onFirstSub, onLastunsub func(string)) *Broadcaster {
 	return &Broadcaster{
-		topics: make(map[string]map[*websocket.Conn]bool),
+		topics:      make(map[string]map[*websocket.Conn]bool),
+		onFirstSub:  onFirstSub,
+		onLastUnsub: onLastunsub,
 	}
 }
 
@@ -33,6 +37,10 @@ func (b *Broadcaster) Subscribe(conn *websocket.Conn, symbol string) {
 
 	b.topics[symbol][conn] = true
 	slog.Info("client subscribed", "symbol", symbol, "total_subscribers", len(b.topics[symbol]))
+
+	if len(b.topics[symbol]) == 1 && b.onFirstSub != nil {
+		b.onFirstSub(symbol)
+	}
 }
 
 func (b *Broadcaster) Unsubscribe(conn *websocket.Conn, symbol string) {
@@ -42,6 +50,10 @@ func (b *Broadcaster) Unsubscribe(conn *websocket.Conn, symbol string) {
 	if clients, exists := b.topics[symbol]; exists {
 		delete(clients, conn)
 		slog.Info("client unsubscribed", "symbol", symbol, "remaining subs", len(b.topics[symbol]))
+
+		if len(clients) == 0 && b.onLastUnsub != nil {
+			b.onLastUnsub(symbol)
+		}
 	}
 }
 
@@ -87,7 +99,7 @@ func (b *Broadcaster) Shutdown() {
 		"Server is shutting down for maintenance",
 	)
 
-	for symbol, clients := range b.topics{
+	for symbol, clients := range b.topics {
 		for conn := range clients {
 			err := conn.WriteMessage(websocket.CloseMessage, closeMessage)
 			if err != nil {

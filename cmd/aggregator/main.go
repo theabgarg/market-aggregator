@@ -15,6 +15,7 @@ import (
 	"github.com/theabgarg/market-aggregator/internal/api"
 	"github.com/theabgarg/market-aggregator/internal/config"
 	"github.com/theabgarg/market-aggregator/internal/domain"
+	"github.com/theabgarg/market-aggregator/internal/engine"
 	"github.com/theabgarg/market-aggregator/internal/fetcher"
 	"github.com/theabgarg/market-aggregator/internal/repository"
 )
@@ -87,8 +88,15 @@ func main() {
 
 	defer repo.Close()
 
+	liveFeed := make(chan domain.MarketData, 100)
+
+	StreamManager := engine.NewStreamManager(ctx, liveFeed)
+
 	cache := domain.NewMarketCache()
-	broadcaster := domain.NewBroadcaster()
+	broadcaster := domain.NewBroadcaster(
+		func(symbol string) { StreamManager.Start(symbol) },
+		func(symbol string) { StreamManager.Stop(symbol) },
+	)
 
 	apiHandler := api.NewHandler(cache, repo, broadcaster)
 
@@ -104,6 +112,16 @@ func main() {
 	dbWriteChan := make(chan domain.MarketData, 500)
 
 	go func() {
+		slog.Info("engine router running...")
+		for tick := range liveFeed {
+			fmt.Print(tick, "tick")
+			cache.Update(tick.Symbol, tick.Price)
+			broadcaster.Broadcast(tick)
+			dbWriteChan <- tick
+		}
+	}()
+
+	go func() {
 		for tick := range dbWriteChan {
 			insertCtx, cancelInsert := context.WithTimeout(context.Background(), 2*time.Second)
 			err := repo.InsertTick(insertCtx, tick)
@@ -115,7 +133,7 @@ func main() {
 		}
 	}()
 
-	go startEngine(ctx, cache, broadcaster, cfg.TargetSymbol, dbWriteChan)
+	// go startEngine(ctx, cache, broadcaster, cfg.TargetSymbol, dbWriteChan)
 
 	go func() {
 		log.Printf("HTTP API listening on port %s...\n", cfg.Port)

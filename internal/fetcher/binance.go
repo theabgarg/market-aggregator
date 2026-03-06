@@ -26,6 +26,7 @@ func (b *BinanceStreamer) Stream(ctx context.Context, symbol string, out chan<- 
 	log.Printf("[Binance] connecting to url %s...", url)
 	conn, _ , err:= websocket.DefaultDialer.DialContext(ctx, url, nil)
 	if err != nil {
+		log.Printf("[Binance] failed while connecting to url %s...", url)
 		return fmt.Errorf("[Binance] connection error: %v", err)
 	}
 
@@ -38,8 +39,11 @@ func (b *BinanceStreamer) Stream(ctx context.Context, symbol string, out chan<- 
 
 	for {
 		var trade binanceTrade
+		fmt.Println("reading json", trade)
 		err := conn.ReadJSON(&trade)
+		fmt.Println("reading json 2", trade)
 		if err != nil {
+			fmt.Println("got error reading a json")
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -47,6 +51,8 @@ func (b *BinanceStreamer) Stream(ctx context.Context, symbol string, out chan<- 
 		}
 		price, _ := strconv.ParseFloat(trade.Price, 64)
 		volume, _ := strconv.ParseFloat(trade.Volume, 64)
+
+		fmt.Println("outputting data", trade.Symbol)
 
 		out <- domain.MarketData{
 			Symbol: trade.Symbol,
