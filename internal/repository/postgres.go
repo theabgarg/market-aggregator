@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/theabgarg/market-aggregator/internal/domain"
 )
@@ -15,7 +16,7 @@ type PostgresRepo struct {
 
 func NewPostgresRepo(ctx context.Context, dbUrl string) (*PostgresRepo, error) {
 	pool, err := pgxpool.New(ctx, dbUrl)
-	if err !=nil {
+	if err != nil {
 		return nil, fmt.Errorf("Error creating new pool %w", err)
 	}
 
@@ -40,10 +41,10 @@ func NewPostgresRepo(ctx context.Context, dbUrl string) (*PostgresRepo, error) {
 	}
 
 	slog.Info("connected to databse and verified schema")
-	return &PostgresRepo{pool : pool}, nil
+	return &PostgresRepo{pool: pool}, nil
 }
 
-func (r *PostgresRepo) Close(){
+func (r *PostgresRepo) Close() {
 	r.pool.Close()
 }
 
@@ -88,4 +89,26 @@ func (r *PostgresRepo) GetHistoricalTicks(ctx context.Context, symbol string, li
 
 	return ticks, nil
 
+}
+
+func (r *PostgresRepo) InsertTickBatch(ctx context.Context, ticks []domain.MarketData) error {
+	if len(ticks) == 0 {
+		return nil
+	}
+
+	_, err := r.pool.CopyFrom(
+		ctx,
+		pgx.Identifier{"ticks"},
+		[]string{"symbol", "price", "volume", "source", "timestamp"}, // Target columns
+		pgx.CopyFromSlice(len(ticks), func(i int) ([]any, error) {
+			return []any{
+				ticks[i].Symbol,
+				ticks[i].Price,
+				ticks[i].Volume,
+				ticks[i].Source,
+				ticks[i].Timestamp,
+			}, nil
+		}),
+	)
+	return err
 }

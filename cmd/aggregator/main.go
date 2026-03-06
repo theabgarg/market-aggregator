@@ -73,7 +73,7 @@ func main() {
 		Handler: mux,
 	}
 
-	dbWriteChan := make(chan domain.MarketData, 500)
+	dbWriteChan := make(chan domain.MarketData, 5000)
 
 	go func() {
 		slog.Info("engine router running...")
@@ -85,14 +85,39 @@ func main() {
 	}()
 
 	go func() {
-		for tick := range dbWriteChan {
-			insertCtx, cancelInsert := context.WithTimeout(context.Background(), 2*time.Second)
-			err := repo.InsertTick(insertCtx, tick)
+		batchSize := 100
+		batch := make([]domain.MarketData, 0, batchSize)
 
-			if err != nil {
-				slog.Error("failed to write tick to DB", "error", err.Error())
+		flushTicker := time.NewTicker(500 * time.Millisecond)
+		defer flushTicker.Stop()
+		for {
+			select {
+			case tick, ok := <-dbWriteChan:
+				if !ok {
+					if len(batch) > 0 {
+						repo.InsertTickBatch(context.Background(), batch)
+					}
+					slog.Info("database worker did final flush and returned")
+					return
+				}
+				batch = append(batch, tick)
+				if len(batch) >= batchSize {
+					err := repo.InsertTickBatch(context.Background(), batch)
+					if err != nil {
+						slog.Error("failed batch insert", "error", err.Error())
+					}
+					batch = batch[:0]
+				}
+			case <-flushTicker.C:
+				if len(batch) > 0 {
+					err := repo.InsertTickBatch(context.Background(), batch)
+					if err != nil {
+						slog.Error("failed timed batch insert", "error", err.Error())
+					}
+					batch = batch[:0]
+				}
+
 			}
-			cancelInsert()
 		}
 	}()
 
@@ -105,14 +130,11 @@ func main() {
 		}
 	}()
 
-	// 4. Block the Main Thread
-	// The program will sit precisely on this line forever, until you press Ctrl+C
 	<-ctx.Done()
 	slog.Warn("\nShutdown signal received! Initiating graceful shutdown...")
 
 	broadcaster.Shutdown()
 
-	// 5. Graceful HTTP Shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
