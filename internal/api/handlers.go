@@ -20,6 +20,11 @@ type Handler struct {
 	upgrader    websocket.Upgrader
 }
 
+type ErrorResponse struct {
+	Error string `json:"error"`
+	Code  int    `json:"code"`
+}
+
 func NewHandler(c *domain.MarketCache, r *repository.PostgresRepo, b *domain.Broadcaster) *Handler {
 	return &Handler{
 		cache:       c,
@@ -48,7 +53,7 @@ func (h *Handler) handleAggregator(w http.ResponseWriter, r *http.Request) {
 
 	price, exist := h.cache.Get(symbol)
 	if !exist {
-		http.Error(w, "Price not available", http.StatusNotFound)
+		respondWithError(w, http.StatusNotFound, "Price not available")
 		return
 	}
 
@@ -72,7 +77,7 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 	ticks, err := h.repo.GetHistoricalTicks(ctx, symbol, 100)
 	if err != nil {
 		slog.Error("failed to fetch historical data", "error", err.Error())
-		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		respondWithError(w, http.StatusInternalServerError, "something went wrong")
 		return
 	}
 
@@ -108,4 +113,16 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("unknown websocket action received", "action", msg.Action)
 		}
 	}
+}
+
+func respondWithError(w http.ResponseWriter, code int, message string) {
+	w.Header().Set("content-type", "application/json")
+	w.WriteHeader(code)
+
+	errorObj := ErrorResponse{
+		Code:  code,
+		Error: message,
+	}
+
+	json.NewEncoder(w).Encode(errorObj)
 }
