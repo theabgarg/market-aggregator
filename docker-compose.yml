@@ -21,11 +21,24 @@ services:
       PORT: 8080
       TARGET_SYMBOL: btcusdt
       DATABASE_URL: postgres://trader:supersecretpassword@database:5432/market_data
+      REDIS_ADDR: redis:6379
     ports:
       - "8080:8080"
     depends_on:
       database:
         condition: service_healthy
+      redis:
+        condition: service_started
+
+  redis:
+    image: redis:7-alpine
+    container_name: aggregator_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes 
 
 volumes:
   pgdata:
+  redis_data:

@@ -11,12 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	"github.com/theabgarg/market-aggregator/internal/api"
 	"github.com/theabgarg/market-aggregator/internal/config"
 	"github.com/theabgarg/market-aggregator/internal/domain"
 	"github.com/theabgarg/market-aggregator/internal/engine"
 	"github.com/theabgarg/market-aggregator/internal/repository"
+	"github.com/theabgarg/market-aggregator/internal/telemetry"
 )
 
 func main() {
@@ -57,7 +59,11 @@ func main() {
 
 	StreamManager := engine.NewStreamManager(ctx, liveFeed)
 
-	cache := domain.NewMarketCache()
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	cache := domain.NewMarketCache(redisAddr)
 	broadcaster := domain.NewBroadcaster(
 		func(symbol string) { StreamManager.Start(symbol) },
 		func(symbol string) { StreamManager.Stop(symbol) },
@@ -68,6 +74,8 @@ func main() {
 	mux := http.NewServeMux()
 
 	apiHandler.RegisterRoutes(mux)
+
+	mux.HandleFunc("/metrics", promhttp.Handler().ServeHTTP)
 
 	limiter := api.NewIPRateLimiter(2, 5)
 
@@ -89,6 +97,7 @@ func main() {
 	go func() {
 		slog.Info("engine router running...")
 		for tick := range liveFeed {
+			telemetry.TicksProcessed.Inc()
 			cache.Update(tick.Symbol, tick.Price)
 			broadcaster.Broadcast(tick)
 			dbWriteChan <- tick

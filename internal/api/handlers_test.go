@@ -10,7 +10,8 @@ import (
 )
 
 func TestHandleAggregator(t *testing.T) {
-	cache := domain.NewMarketCache()
+	redisAddr := "localhost:6379" 
+	cache := domain.NewMarketCache(redisAddr)
 	cache.Update("BTCUSDT", 65000.50)
 
 	h := NewHandler(cache, nil, nil)

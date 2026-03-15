@@ -6,7 +6,8 @@ import (
 )
 
 func TestMarketCache_concurrency(t *testing.T) {
-	cache := NewMarketCache()
+	redisAddr := "localhost:6379"
+	cache := NewMarketCache(redisAddr)
 	symbol := "BTCUSD"
 
 	cache.Update(symbol, 100.0)

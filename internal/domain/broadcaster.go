@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/theabgarg/market-aggregator/internal/telemetry"
 )
 
 type ClientMessage struct {
@@ -36,6 +37,7 @@ func (b *Broadcaster) Subscribe(conn *websocket.Conn, symbol string) {
 	}
 
 	b.topics[symbol][conn] = true
+	telemetry.ActiveClients.Inc()
 	slog.Info("client subscribed", "symbol", symbol, "total_subscribers", len(b.topics[symbol]))
 
 	if len(b.topics[symbol]) == 1 && b.onFirstSub != nil {
@@ -49,6 +51,7 @@ func (b *Broadcaster) Unsubscribe(conn *websocket.Conn, symbol string) {
 
 	if clients, exists := b.topics[symbol]; exists {
 		delete(clients, conn)
+		telemetry.ActiveClients.Dec()
 		slog.Info("client unsubscribed", "symbol", symbol, "remaining subs", len(b.topics[symbol]))
 
 		if len(clients) == 0 && b.onLastUnsub != nil {
@@ -64,6 +67,7 @@ func (b *Broadcaster) RemoveClient(conn *websocket.Conn) {
 	for symbol, clients := range b.topics {
 		if _, exists := clients[conn]; exists {
 			delete(clients, conn)
+			telemetry.ActiveClients.Dec()
 			slog.Info("client cleaned up from topic", "symbol", symbol)
 		}
 	}
