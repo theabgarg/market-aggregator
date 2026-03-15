@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/cors"
 	"github.com/theabgarg/market-aggregator/internal/api"
 	"github.com/theabgarg/market-aggregator/internal/config"
 	"github.com/theabgarg/market-aggregator/internal/domain"
@@ -68,9 +69,19 @@ func main() {
 
 	apiHandler.RegisterRoutes(mux)
 
+	limiter := api.NewIPRateLimiter(2, 5)
+
+	c := cors.New(cors.Options{
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization"},
+	})
+
+	handlerChain := c.Handler(limiter.Middleware(api.RequestLogger(mux)))
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", cfg.Port),
-		Handler: mux,
+		Handler: handlerChain,
 	}
 
 	dbWriteChan := make(chan domain.MarketData, 5000)
