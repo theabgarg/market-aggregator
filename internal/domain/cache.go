@@ -11,17 +11,8 @@ type MarketCache struct {
 	client *redis.Client
 }
 
-func NewMarketCache(redisAddr string) *MarketCache {
-	rdb := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-	})
-
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		slog.Error("failed to connect to redis", "error", err.Error())
-		panic(err)
-	}
-	slog.Info("connected to redis")
-	return &MarketCache{client: rdb}
+func NewMarketCache(client *redis.Client) *MarketCache {
+	return &MarketCache{client: client}
 }
 
 func (c *MarketCache) Update(symbol string, price float64) {

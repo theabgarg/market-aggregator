@@ -3,11 +3,14 @@ package domain
 import (
 	"sync"
 	"testing"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func TestMarketCache_concurrency(t *testing.T) {
 	redisAddr := "localhost:6379"
-	cache := NewMarketCache(redisAddr)
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	cache := NewMarketCache(rdb)
 	symbol := "BTCUSD"
 
 	cache.Update(symbol, 100.0)

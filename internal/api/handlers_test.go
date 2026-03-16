@@ -6,12 +6,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/theabgarg/market-aggregator/internal/domain"
 )
 
 func TestHandleAggregator(t *testing.T) {
-	redisAddr := "localhost:6379" 
-	cache := domain.NewMarketCache(redisAddr)
+	redisAddr := "localhost:6379"
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	cache := domain.NewMarketCache(rdb)
 	cache.Update("BTCUSDT", 65000.50)
 
 	h := NewHandler(cache, nil, nil)

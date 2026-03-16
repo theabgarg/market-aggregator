@@ -40,6 +40,7 @@ func NewHandler(c *domain.MarketCache, r *repository.PostgresRepo, b *domain.Bro
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/prices", h.handleAggregator)
+	// mux.Handle("/api/history", JWTMiddleware(http.HandlerFunc(h.handleHistory)))
 	mux.HandleFunc("/api/history", h.handleHistory)
 	mux.HandleFunc("/ws", h.handleWebSocket)
 }
@@ -65,6 +66,8 @@ func (h *Handler) handleAggregator(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
+	// userID := r.Context().Value(userIDKey).(string)
+	// slog.Info("authorized request", "user ID", userID)
 	symbol := r.URL.Query().Get("symbol")
 	if symbol == "" {
 		http.Error(w, "symbol is a required field", http.StatusBadRequest)

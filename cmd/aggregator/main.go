@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/cors"
 	"github.com/theabgarg/market-aggregator/internal/api"
 	"github.com/theabgarg/market-aggregator/internal/config"
@@ -63,7 +65,8 @@ func main() {
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
-	cache := domain.NewMarketCache(redisAddr)
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	cache := domain.NewMarketCache(rdb)
 	broadcaster := domain.NewBroadcaster(
 		func(symbol string) { StreamManager.Start(symbol) },
 		func(symbol string) { StreamManager.Stop(symbol) },
@@ -94,13 +97,24 @@ func main() {
 
 	dbWriteChan := make(chan domain.MarketData, 5000)
 
+	go broadcaster.StartRedisListener(ctx, rdb)
+
 	go func() {
 		slog.Info("engine router running...")
 		for tick := range liveFeed {
 			telemetry.TicksProcessed.Inc()
 			cache.Update(tick.Symbol, tick.Price)
-			broadcaster.Broadcast(tick)
 			dbWriteChan <- tick
+			tickJSON, err := json.Marshal(tick)
+			if err != nil {
+				slog.Error("failed to marshal tick for redis", "error", err)
+				continue
+			}
+
+			err = rdb.Publish(context.Background(), "market:"+tick.Symbol, tickJSON).Err()
+			if err != nil {
+				slog.Error("failed to publish to redis", "symbol", tick.Symbol, "error", err)
+			}
 		}
 	}()
 

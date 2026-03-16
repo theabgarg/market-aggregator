@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 	"github.com/theabgarg/market-aggregator/internal/telemetry"
 )
 
@@ -14,7 +17,7 @@ type ClientMessage struct {
 }
 
 type Broadcaster struct {
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	topics      map[string]map[*websocket.Conn]bool
 	onFirstSub  func(symbol string)
 	onLastUnsub func(symbol string)
@@ -25,6 +28,32 @@ func NewBroadcaster(onFirstSub, onLastunsub func(string)) *Broadcaster {
 		topics:      make(map[string]map[*websocket.Conn]bool),
 		onFirstSub:  onFirstSub,
 		onLastUnsub: onLastunsub,
+	}
+}
+
+func (b *Broadcaster) StartRedisListener(ctx context.Context, rdb *redis.Client) {
+	pubsub := rdb.PSubscribe(ctx, "market:*")
+	defer pubsub.Close()
+
+	ch := pubsub.Channel()
+	slog.Info("broadcaster is now listening to Redis Pub/Sub")
+
+	for msg := range ch {
+		var tick MarketData
+		if err := json.Unmarshal([]byte(msg.Payload), &tick); err != nil {
+			continue
+		}
+		b.mu.RLock()
+		clients, exists := b.topics[tick.Symbol]
+		if exists {
+			for client := range clients {
+				err := client.WriteJSON(tick)
+				if err != nil {
+					slog.Warn("failed to send tick to client", "error", err.Error())
+				}
+			}
+		}
+		b.mu.RUnlock()
 	}
 }
 
